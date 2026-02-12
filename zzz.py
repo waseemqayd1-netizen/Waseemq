@@ -21,6 +21,25 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ================= قاعدة البيانات =================
 
+
+def init_db():
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        price REAL
+    )
+    """)
+    
+    conn.commit()
+    conn.close()
+
+init_db()
+
+
 def create_connection():
     return sqlite3.connect(DB_FILE)
 
@@ -584,5 +603,6 @@ if __name__ == "__main__":
 
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
     
+
 
 
