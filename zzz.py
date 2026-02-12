@@ -4,9 +4,32 @@ from werkzeug.utils import secure_filename
 from urllib.parse import quote
 from datetime import datetime
 import uuid
-
-
 app = Flask(__name__)
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "database.db")
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            price REAL NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+    
+
+
+init_db()
+
+
 app.secret_key = "secret123"
 
 STORE_NAME = "🏪 سوبر ماركت أولاد قايد محمد"
@@ -604,6 +627,7 @@ if __name__ == "__main__":
 
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
     
+
 
 
 
