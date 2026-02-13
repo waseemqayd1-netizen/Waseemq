@@ -1,302 +1,248 @@
-from flask import Flask, request, redirect, render_template_string
+from flask import Flask, request, redirect, session
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, date
-from sqlalchemy import func
+from urllib.parse import quote
+import os
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///shop.db"
+app.secret_key = "super_market_secret_key"
+
+# DATABASE (Render compatible)
+database_url = os.environ.get("DATABASE_URL")
+
+if database_url:
+    database_url = database_url.replace("postgres://", "postgresql://")
+
+app.config["SQLALCHEMY_DATABASE_URI"] = database_url or "sqlite:///shop.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
 db = SQLAlchemy(app)
 
-# =====================
+# =======================
 # MODELS
-# =====================
+# =======================
+
+class Admin(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100))
+    password = db.Column(db.String(100))
+
+class Category(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200))
 
 class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(200))
     price = db.Column(db.Float)
-    cost_price = db.Column(db.Float)
     stock = db.Column(db.Integer)
-
-class Invoice(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    total = db.Column(db.Float)
-    profit = db.Column(db.Float)
-    payment_method = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-class InvoiceItem(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    invoice_id = db.Column(db.Integer)
-    product_name = db.Column(db.String(200))
-    quantity = db.Column(db.Integer)
-    price = db.Column(db.Float)
-    total = db.Column(db.Float)
-
-class Expense(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    description = db.Column(db.String(300))
-    amount = db.Column(db.Float)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-class StockMovement(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    product_name = db.Column(db.String(200))
-    quantity = db.Column(db.Integer)
-    type = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-# =====================
-# إنشاء الجداول (بديل before_first_request)
-# =====================
+    image = db.Column(db.String(300))
+    category_id = db.Column(db.Integer)
 
 with app.app_context():
     db.create_all()
+    if not Admin.query.first():
+        db.session.add(Admin(username="admin", password="1234"))
+        db.session.commit()
 
-# =====================
-# BASE TEMPLATE
-# =====================
+# =======================
+# STYLE
+# =======================
 
-BASE_HTML = """
-<!DOCTYPE html>
-<html dir="rtl">
-<head>
-<meta charset="UTF-8">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+STYLE = """
 <style>
-body{background:#0d0d0d;color:gold}
-.card{background:#1a1a1a;border:1px solid gold}
+body{background:#000;color:gold;font-family:tahoma}
+.card{background:#111;border:1px solid gold;border-radius:12px}
 .table{color:gold}
-.navbar{background:black}
+input,select{background:#111;color:gold;border:1px solid gold}
+.btn-gold{background:gold;color:black;font-weight:bold;border:none;padding:6px 12px;border-radius:6px}
+.container{max-width:1100px;margin:auto}
+.header{text-align:center;padding:20px;border-bottom:2px solid gold}
+.footer{text-align:center;margin-top:50px;padding:20px;border-top:2px solid gold;font-size:14px}
+img{max-width:100px;border-radius:8px}
 </style>
-</head>
-<body>
-
-<nav class="navbar navbar-expand-lg navbar-dark">
-<div class="container">
-<a class="navbar-brand text-warning" href="/">نظام المحل</a>
-<div>
-<a class="btn btn-warning me-2" href="/products">المنتجات</a>
-<a class="btn btn-warning me-2" href="/new_invoice">فاتورة</a>
-<a class="btn btn-warning" href="/expenses">المصروفات</a>
-</div>
-</div>
-</nav>
-
-<div class="container mt-4">
-{{content|safe}}
-</div>
-
-</body>
-</html>
 """
 
-# =====================
-# DASHBOARD
-# =====================
+# =======================
+# ADMIN LOGIN
+# =======================
 
-@app.route("/")
+@app.route("/admin", methods=["GET","POST"])
+def admin_login():
+    if request.method=="POST":
+        user=Admin.query.filter_by(
+            username=request.form["username"],
+            password=request.form["password"]
+        ).first()
+        if user:
+            session["admin"]=True
+            return redirect("/dashboard")
+
+    return STYLE + """
+    <div class='container'>
+    <h2>دخول المدير</h2>
+    <form method='post'>
+    <input name='username' class='form-control mb-2' placeholder='اسم المستخدم'>
+    <input name='password' type='password' class='form-control mb-2' placeholder='كلمة المرور'>
+    <button class='btn-gold'>دخول</button>
+    </form>
+    </div>
+    """
+
+@app.route("/dashboard")
 def dashboard():
-    total_profit = db.session.query(func.sum(Invoice.profit)).scalar() or 0
-    total_expenses = db.session.query(func.sum(Expense.amount)).scalar() or 0
-    net_profit = total_profit - total_expenses
+    if not session.get("admin"): return redirect("/admin")
+    return STYLE + """
+    <div class='container'>
+    <h2>لوحة التحكم</h2>
+    <a href='/categories' class='btn-gold m-2'>الفئات</a>
+    <a href='/products' class='btn-gold m-2'>المنتجات</a>
+    </div>
+    """
 
-    today = date.today()
-    today_sales = db.session.query(func.sum(Invoice.total))\
-        .filter(func.date(Invoice.created_at)==today).scalar() or 0
+# =======================
+# CATEGORY CRUD
+# =======================
 
-    content = f"""
-<div class='row text-center'>
-<div class='col-md-3'><div class='card p-3'><h5>مبيعات اليوم</h5><h3>{today_sales}</h3></div></div>
-<div class='col-md-3'><div class='card p-3'><h5>إجمالي الأرباح</h5><h3>{total_profit}</h3></div></div>
-<div class='col-md-3'><div class='card p-3'><h5>المصروفات</h5><h3>{total_expenses}</h3></div></div>
-<div class='col-md-3'><div class='card p-3'><h5>صافي الربح</h5><h3>{net_profit}</h3></div></div>
-</div>
-"""
-    return render_template_string(BASE_HTML, content=content)
+@app.route("/categories", methods=["GET","POST"])
+def categories():
+    if not session.get("admin"): return redirect("/admin")
 
-# =====================
-# PRODUCTS
-# =====================
+    if request.method=="POST":
+        db.session.add(Category(name=request.form["name"]))
+        db.session.commit()
+        return redirect("/categories")
+
+    cats=Category.query.all()
+    rows=""
+    for c in cats:
+        rows+=f"<tr><td>{c.name}</td><td><a href='/delete_cat/{c.id}' class='btn-gold'>حذف</a></td></tr>"
+
+    return STYLE + f"""
+    <div class='container'>
+    <h3>الفئات</h3>
+    <form method='post'>
+    <input name='name' class='form-control mb-2'>
+    <button class='btn-gold'>إضافة</button>
+    </form>
+    <table class='table'><tr><th>الفئة</th><th>تحكم</th></tr>{rows}</table>
+    </div>
+    """
+
+@app.route("/delete_cat/<int:id>")
+def delete_cat(id):
+    Category.query.filter_by(id=id).delete()
+    db.session.commit()
+    return redirect("/categories")
+
+# =======================
+# PRODUCT CRUD
+# =======================
 
 @app.route("/products", methods=["GET","POST"])
 def products():
-    if request.method == "POST":
+    if not session.get("admin"): return redirect("/admin")
+
+    cats=Category.query.all()
+
+    if request.method=="POST":
         db.session.add(Product(
             name=request.form["name"],
             price=float(request.form["price"]),
-            cost_price=float(request.form["cost_price"]),
-            stock=int(request.form["stock"])
+            stock=int(request.form["stock"]),
+            image=request.form["image"],
+            category_id=int(request.form["category_id"])
         ))
         db.session.commit()
         return redirect("/products")
 
-    products = Product.query.all()
-    rows = ""
+    products=Product.query.all()
+    rows=""
     for p in products:
-        rows += f"<tr><td>{p.name}</td><td>{p.price}</td><td>{p.cost_price}</td><td>{p.stock}</td></tr>"
+        cat=Category.query.get(p.category_id)
+        rows+=f"""
+        <tr>
+        <td>{p.name}</td>
+        <td>{cat.name}</td>
+        <td>{p.price}</td>
+        <td>{p.stock}</td>
+        <td><img src='{p.image}'></td>
+        <td><a href='/delete_product/{p.id}' class='btn-gold'>حذف</a></td>
+        </tr>
+        """
 
-    content = f"""
-<h2>إدارة المنتجات</h2>
-<form method="post" class="row g-2 mb-4">
-<div class="col"><input class="form-control" name="name" placeholder="اسم المنتج"></div>
-<div class="col"><input class="form-control" name="price" placeholder="سعر البيع"></div>
-<div class="col"><input class="form-control" name="cost_price" placeholder="سعر التكلفة"></div>
-<div class="col"><input class="form-control" name="stock" placeholder="المخزون"></div>
-<div class="col"><button class="btn btn-warning">حفظ</button></div>
-</form>
+    options="".join([f"<option value='{c.id}'>{c.name}</option>" for c in cats])
 
-<table class="table table-dark table-striped">
-<tr><th>الاسم</th><th>البيع</th><th>التكلفة</th><th>المخزون</th></tr>
-{rows}
-</table>
-"""
-    return render_template_string(BASE_HTML, content=content)
+    return STYLE + f"""
+    <div class='container'>
+    <h3>المنتجات</h3>
+    <form method='post'>
+    <input name='name' class='form-control mb-2'>
+    <input name='price' class='form-control mb-2'>
+    <input name='stock' class='form-control mb-2'>
+    <input name='image' class='form-control mb-2' placeholder='رابط الصورة'>
+    <select name='category_id' class='form-control mb-2'>{options}</select>
+    <button class='btn-gold'>إضافة</button>
+    </form>
+    <table class='table'>
+    <tr><th>الاسم</th><th>الفئة</th><th>السعر</th><th>المخزون</th><th>الصورة</th><th>تحكم</th></tr>
+    {rows}
+    </table>
+    </div>
+    """
 
-# =====================
-# NEW INVOICE
-# =====================
+@app.route("/delete_product/<int:id>")
+def delete_product(id):
+    Product.query.filter_by(id=id).delete()
+    db.session.commit()
+    return redirect("/products")
 
-@app.route("/new_invoice", methods=["GET","POST"])
-def new_invoice():
-    products = Product.query.all()
+# =======================
+# CUSTOMER SHOP
+# =======================
 
-    if request.method == "POST":
-        total = 0
-        profit = 0
+@app.route("/")
+def shop():
+    categories=Category.query.all()
+    content=STYLE+"<div class='container'>"
 
-        invoice = Invoice(payment_method=request.form["payment"])
-        db.session.add(invoice)
-        db.session.commit()
+    content+="""<div class='header'>
+    <h3>سوبر ماركت اولاد قايد محمد</h3>
+    <p>للتجارة العامة</p>
+    <strong>اولاد قايد للتجارة العامة</strong>
+    </div>"""
 
-        invoice_rows = ""
-
+    for c in categories:
+        products=Product.query.filter_by(category_id=c.id).all()
+        content+=f"<h4>{c.name}</h4><div class='row'>"
         for p in products:
-            qty = request.form.get(f"qty_{p.id}")
-            if qty and int(qty) > 0:
-                qty = int(qty)
+            content+=f"""
+            <div class='card p-3 m-2'>
+            <img src='{p.image}'>
+            <h5>{p.name}</h5>
+            <p>{p.price} ر.ي</p>
+            <form action='/add/{p.id}' method='post'>
+            <input type='number' name='qty' min='1' class='form-control mb-1'>
+            <button class='btn-gold'>إضافة للسلة</button>
+            </form>
+            </div>
+            """
+        content+="</div>"
 
-                if p.stock < qty:
-                    return "المخزون غير كافي"
+    content+="<a href='/cart' class='btn-gold'>سلة المشتريات</a>"
 
-                line_total = qty * p.price
-                line_profit = qty * (p.price - p.cost_price)
+    content+="""<div class='footer'>
+    📍 الازرق / موعد حماده : حبيل تود<br>
+    لصاحبها « فايز / وإخوانه »<br><hr>
+    إعداد وتصميم « م / وسيم العامري »<br>
+    للتواصل 967770295876
+    </div></div>"""
 
-                total += line_total
-                profit += line_profit
-                p.stock -= qty
+    return content
 
-                db.session.add(InvoiceItem(
-                    invoice_id=invoice.id,
-                    product_name=p.name,
-                    quantity=qty,
-                    price=p.price,
-                    total=line_total
-                ))
-
-                invoice_rows += f"""
-<tr>
-<td>{p.name}</td>
-<td>{qty}</td>
-<td>{p.price}</td>
-<td>{line_total}</td>
-</tr>
-"""
-
-        discount = float(request.form.get("discount") or 0)
-        vat = float(request.form.get("vat") or 0)
-
-        total = total - discount
-        total = total + (total * vat / 100)
-
-        invoice.total = total
-        invoice.profit = profit
-        db.session.commit()
-
-        content = f"""
-<h2>فاتورة رقم {invoice.id}</h2>
-<table class="table table-dark">
-<tr><th>المنتج</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr>
-{invoice_rows}
-</table>
-
-<h5>خصم: {discount}</h5>
-<h5>ضريبة: {vat}%</h5>
-<h3>الإجمالي النهائي: {total}</h3>
-<h5>طريقة الدفع: {invoice.payment_method}</h5>
-
-<a href="/" class="btn btn-warning">رجوع للرئيسية</a>
-"""
-        return render_template_string(BASE_HTML, content=content)
-
-    inputs = ""
-    for p in products:
-        inputs += f"""
-<div class='col-md-4'>
-<label>{p.name} (المتوفر {p.stock})</label>
-<input type='number' name='qty_{p.id}' class='form-control' min='0'>
-</div>
-"""
-
-    content = f"""
-<h2>فاتورة جديدة</h2>
-<form method="post">
-<div class="row">{inputs}</div>
-
-<hr>
-<div class="row">
-<div class="col"><input name="discount" class="form-control" placeholder="خصم"></div>
-<div class="col"><input name="vat" class="form-control" placeholder="ضريبة %"></div>
-<div class="col">
-<select name="payment" class="form-control">
-<option>نقد</option>
-<option>تحويل</option>
-<option>آجل</option>
-</select>
-</div>
-</div>
-
-<br>
-<button class="btn btn-warning">حفظ الفاتورة</button>
-</form>
-"""
-    return render_template_string(BASE_HTML, content=content)
-
-# =====================
-# EXPENSES
-# =====================
-
-@app.route("/expenses", methods=["GET","POST"])
-def expenses():
-    if request.method == "POST":
-        db.session.add(Expense(
-            description=request.form["description"],
-            amount=float(request.form["amount"])
-        ))
-        db.session.commit()
-        return redirect("/expenses")
-
-    expenses = Expense.query.all()
-    rows = ""
-    for e in expenses:
-        rows += f"<tr><td>{e.description}</td><td>{e.amount}</td></tr>"
-
-    content = f"""
-<h2>المصروفات</h2>
-<form method="post" class="row g-2 mb-4">
-<div class="col"><input name="description" class="form-control" placeholder="الوصف"></div>
-<div class="col"><input name="amount" class="form-control" placeholder="المبلغ"></div>
-<div class="col"><button class="btn btn-warning">حفظ</button></div>
-</form>
-
-<table class="table table-dark">
-<tr><th>الوصف</th><th>المبلغ</th></tr>
-{rows}
-</table>
-"""
-    return render_template_string(BASE_HTML, content=content)
+# =======================
+# RUN
+# =======================
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
     
