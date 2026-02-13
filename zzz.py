@@ -47,9 +47,50 @@ class StockMovement(db.Model):
     type = db.Column(db.String(50))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-@app.before_first_request
-def create_tables():
+# =====================
+# إنشاء الجداول (بديل before_first_request)
+# =====================
+
+with app.app_context():
     db.create_all()
+
+# =====================
+# BASE TEMPLATE
+# =====================
+
+BASE_HTML = """
+<!DOCTYPE html>
+<html dir="rtl">
+<head>
+<meta charset="UTF-8">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+body{background:#0d0d0d;color:gold}
+.card{background:#1a1a1a;border:1px solid gold}
+.table{color:gold}
+.navbar{background:black}
+</style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark">
+<div class="container">
+<a class="navbar-brand text-warning" href="/">نظام المحل</a>
+<div>
+<a class="btn btn-warning me-2" href="/products">المنتجات</a>
+<a class="btn btn-warning me-2" href="/new_invoice">فاتورة</a>
+<a class="btn btn-warning" href="/expenses">المصروفات</a>
+</div>
+</div>
+</nav>
+
+<div class="container mt-4">
+{{content|safe}}
+</div>
+
+</body>
+</html>
+"""
 
 # =====================
 # DASHBOARD
@@ -65,14 +106,15 @@ def dashboard():
     today_sales = db.session.query(func.sum(Invoice.total))\
         .filter(func.date(Invoice.created_at)==today).scalar() or 0
 
-    return render_template_string(BASE_HTML, content=f"""
+    content = f"""
 <div class='row text-center'>
 <div class='col-md-3'><div class='card p-3'><h5>مبيعات اليوم</h5><h3>{today_sales}</h3></div></div>
 <div class='col-md-3'><div class='card p-3'><h5>إجمالي الأرباح</h5><h3>{total_profit}</h3></div></div>
 <div class='col-md-3'><div class='card p-3'><h5>المصروفات</h5><h3>{total_expenses}</h3></div></div>
 <div class='col-md-3'><div class='card p-3'><h5>صافي الربح</h5><h3>{net_profit}</h3></div></div>
 </div>
-""")
+"""
+    return render_template_string(BASE_HTML, content=content)
 
 # =====================
 # PRODUCTS
@@ -91,7 +133,6 @@ def products():
         return redirect("/products")
 
     products = Product.query.all()
-
     rows = ""
     for p in products:
         rows += f"<tr><td>{p.name}</td><td>{p.price}</td><td>{p.cost_price}</td><td>{p.stock}</td></tr>"
@@ -173,20 +214,21 @@ def new_invoice():
         invoice.profit = profit
         db.session.commit()
 
-        return render_template_string(BASE_HTML, content=f"""
+        content = f"""
 <h2>فاتورة رقم {invoice.id}</h2>
 <table class="table table-dark">
 <tr><th>المنتج</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr>
 {invoice_rows}
 </table>
 
-<h4>خصم: {discount}</h4>
-<h4>ضريبة: {vat}%</h4>
+<h5>خصم: {discount}</h5>
+<h5>ضريبة: {vat}%</h5>
 <h3>الإجمالي النهائي: {total}</h3>
-<h4>طريقة الدفع: {invoice.payment_method}</h4>
+<h5>طريقة الدفع: {invoice.payment_method}</h5>
 
 <a href="/" class="btn btn-warning">رجوع للرئيسية</a>
-""")
+"""
+        return render_template_string(BASE_HTML, content=content)
 
     inputs = ""
     for p in products:
@@ -254,44 +296,6 @@ def expenses():
 </table>
 """
     return render_template_string(BASE_HTML, content=content)
-
-# =====================
-# BASE TEMPLATE
-# =====================
-
-BASE_HTML = """
-<!DOCTYPE html>
-<html dir="rtl">
-<head>
-<meta charset="UTF-8">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-<style>
-body{background:#0d0d0d;color:gold}
-.card{background:#1a1a1a;border:1px solid gold}
-.table{color:gold}
-.navbar{background:black}
-</style>
-</head>
-<body>
-
-<nav class="navbar navbar-expand-lg navbar-dark">
-<div class="container">
-<a class="navbar-brand text-warning" href="/">نظام المحل</a>
-<div>
-<a class="btn btn-warning me-2" href="/products">المنتجات</a>
-<a class="btn btn-warning me-2" href="/new_invoice">فاتورة</a>
-<a class="btn btn-warning" href="/expenses">المصروفات</a>
-</div>
-</div>
-</nav>
-
-<div class="container mt-4">
-{{content|safe}}
-</div>
-
-</body>
-</html>
-"""
 
 if __name__ == "__main__":
     app.run(debug=True)
