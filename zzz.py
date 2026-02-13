@@ -1,328 +1,323 @@
-from flask import Flask, request, render_template_string, redirect, session, jsonify
+from flask import Flask, request, jsonify, render_template_string, redirect, session, send_file
 import sqlite3, os
-from werkzeug.utils import secure_filename
 from datetime import datetime
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table
+from reportlab.lib import colors
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib import fonts
+from reportlab.lib.units import inch
+from reportlab.platypus import TableStyle
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase import pdfmetrics
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "fallback123")
-
-DB_FILE = "store.db"
-UPLOAD_FOLDER = "static/uploads"
-STORE_PHONE = "967771602370"
-
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-# ================= DATABASE =================
+app.secret_key = "admin_secret"
+DB="store.db"
 
 def connect():
-    return sqlite3.connect(DB_FILE)
+    conn=sqlite3.connect(DB)
+    conn.row_factory=sqlite3.Row
+    return conn
 
 def init_db():
-    conn = connect()
-    cur = conn.cursor()
+    conn=connect()
+    cur=conn.cursor()
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            price REAL,
-            stock INTEGER,
-            discount REAL DEFAULT 0,
-            image TEXT
-        )
-    """)
+    cur.execute("""CREATE TABLE IF NOT EXISTS products(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        price REAL,
+        stock INTEGER
+    )""")
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            total REAL,
-            date TEXT
-        )
-    """)
+    cur.execute("""CREATE TABLE IF NOT EXISTS orders(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        total REAL,
+        date TEXT
+    )""")
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS order_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_id INTEGER,
-            product_id INTEGER,
-            quantity INTEGER,
-            price REAL
-        )
-    """)
+    cur.execute("""CREATE TABLE IF NOT EXISTS order_items(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER,
+        product_name TEXT,
+        quantity INTEGER,
+        price REAL
+    )""")
 
     conn.commit()
     conn.close()
 
 init_db()
 
-# ================= STORE =================
-
+# =======================
+# الصفحة الرئيسية (Responsive 100%)
+# =======================
 @app.route("/")
-def store():
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM products")
-    products = cur.fetchall()
+def index():
+    conn=connect()
+    products=conn.execute("SELECT * FROM products").fetchall()
     conn.close()
 
     return render_template_string("""
 <!DOCTYPE html>
-<html lang="ar">
+<html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<title>متجر وسيم</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>سوبر ماركت اولاد قايد محمد</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
 <style>
-body{direction:rtl;background:#f8f9fa;padding:20px}
-.card:hover{transform:scale(1.05);transition:.3s}
+body{
+ background:#0f0f0f;
+ color:white;
+ font-family:Cairo;
+}
+.navbar{
+ background:black;
+ box-shadow:0 0 15px gold;
+}
+.brand{
+ color:gold;
+ font-weight:bold;
+ font-size:18px;
+}
+.card{
+ background:#1c1c1c;
+ border:1px solid gold;
+ border-radius:15px;
+}
+.btn-gold{
+ background:gold;
+ font-weight:bold;
+}
+.sidebar{
+ position:fixed;
+ top:0;
+ right:-100%;
+ width:100%;
+ max-width:350px;
+ height:100%;
+ background:#111;
+ padding:20px;
+ transition:0.4s;
+ overflow:auto;
+}
+.sidebar.active{ right:0; }
+@media(min-width:768px){
+ .sidebar{ width:350px; }
+}
 </style>
 </head>
 <body>
 
-<h2 class="text-center mb-4">🛒 متجر وسيم</h2>
-<a href="/login" class="btn btn-warning mb-3">لوحة المدير</a>
+<nav class="navbar p-3">
+<div class="container-fluid">
+<span class="brand">
+سوبر ماركت اولاد قايد محمد<br>
+<small>للتجارة العامة</small>
+</span>
+<button class="btn btn-gold" onclick="toggleCart()">🛒</button>
+</div>
+</nav>
 
+<div class="container mt-4">
 <div class="row">
 {% for p in products %}
-<div class="col-md-4">
-<div class="card shadow mb-4">
-<img src="/{{p[5]}}" class="card-img-top" style="height:200px;object-fit:cover">
-<div class="card-body text-center">
-<h5>{{p[1]}}</h5>
-
-{% set final = p[2] - (p[2]*p[4]/100) %}
-{% if p[4] > 0 %}
-<p><del>{{p[2]}}</del> <span class="text-danger">{{final}}</span> ريال</p>
-{% else %}
-<p class="text-danger">{{p[2]}} ريال</p>
-{% endif %}
-
-<p>المخزون: {{p[3]}}</p>
-
-<input type="number" min="1" max="{{p[3]}}" value="1" id="q{{p[0]}}" class="form-control mb-2">
-
-<button onclick="addToCart({{p[0]}}, '{{p[1]}}', {{final}})" 
-class="btn btn-success" {% if p[3] <= 0 %}disabled{% endif %}>
-أضف للسلة
+<div class="col-6 col-md-4 mb-3">
+<div class="card p-3 text-center">
+<h6>{{p.name}}</h6>
+<h5>{{p.price}} ريال</h5>
+<button class="btn btn-gold w-100"
+onclick="addToCart('{{p.name}}',{{p.price}})">
+إضافة
 </button>
-</div>
 </div>
 </div>
 {% endfor %}
 </div>
+</div>
 
+<div class="sidebar" id="cart">
+<h4 class="text-warning">سلة المشتريات</h4>
+<div id="items"></div>
 <hr>
-<h4>🧾 السلة</h4>
-<ul id="cart"></ul>
 <h5 id="total"></h5>
-<button onclick="checkout()" class="btn btn-primary">تأكيد الطلب</button>
+<button class="btn btn-gold w-100" onclick="checkout()">إتمام الطلب</button>
+</div>
 
 <script>
 let cart=[];
 
-function addToCart(id,name,price){
-let qty=document.getElementById("q"+id).value;
-cart.push({id:id,name:name,price:price,quantity:parseInt(qty)});
-render();
+function addToCart(name,price){
+ let item=cart.find(p=>p.name==name);
+ if(item){item.quantity++;}
+ else{cart.push({name,price,quantity:1});}
+ renderCart();
 }
 
-function render(){
-let total=0;
-document.getElementById("cart").innerHTML="";
-cart.forEach(i=>{
-document.getElementById("cart").innerHTML+=
-`<li>${i.name} × ${i.quantity} = ${i.price*i.quantity}</li>`;
-total+=i.price*i.quantity;
-});
-document.getElementById("total").innerHTML="الإجمالي: "+total+" ريال";
+function toggleCart(){
+ document.getElementById("cart").classList.toggle("active");
+}
+
+function renderCart(){
+ let html="";
+ let total=0;
+ cart.forEach(p=>{
+  total+=p.price*p.quantity;
+  html+=p.name+" × "+p.quantity+"<br>";
+ });
+ document.getElementById("items").innerHTML=html;
+ document.getElementById("total").innerHTML="الإجمالي: "+total+" ريال";
 }
 
 function checkout(){
-fetch("/checkout",{
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body:JSON.stringify({cart:cart})
-})
-.then(r=>r.json())
-.then(data=>{
-if(data.success){
-let msg="طلب جديد:%0A";
-cart.forEach(i=>{
-msg+=i.name+" × "+i.quantity+"%0A";
-});
-msg+="%0Aالإجمالي: "+data.total+" ريال";
-window.open("https://wa.me/""" + STORE_PHONE + """?text="+encodeURIComponent(msg));
-cart=[];
-render();
-}else{
-alert(data.error);
-}
-});
+ fetch("/checkout",{
+  method:"POST",
+  headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({cart:cart})
+ }).then(r=>r.json()).then(d=>{
+  if(d.success){
+   window.location="/invoice/"+d.order_id;
+  }
+ });
 }
 </script>
+
+<footer class="text-center mt-4 text-warning">
+إعداد وتصميم: « م / وسيم العامري »
+</footer>
 
 </body>
 </html>
-""", products=products)
+""",products=products)
 
-# ================= CHECKOUT =================
-
-@app.route("/checkout", methods=["POST"])
+# =======================
+# إنهاء الطلب + حفظ
+# =======================
+@app.route("/checkout",methods=["POST"])
 def checkout():
-    data = request.json
-    cart = data["cart"]
+    data=request.json
+    cart=data["cart"]
 
-    conn = connect()
-    cur = conn.cursor()
+    conn=connect()
+    cur=conn.cursor()
 
-    total = 0
-    cur.execute("INSERT INTO orders (total,date) VALUES (?,?)",
-                (0, datetime.now().strftime("%Y-%m-%d %H:%M")))
-    order_id = cur.lastrowid
+    total=0
+    cur.execute("INSERT INTO orders(total,date) VALUES(?,?)",
+                (0,datetime.now().strftime("%Y-%m-%d %H:%M")))
+    order_id=cur.lastrowid
 
     for item in cart:
-        cur.execute("SELECT price,stock,discount FROM products WHERE id=?",
-                    (item["id"],))
-        product = cur.fetchone()
-
-        if not product:
-            continue
-
-        price, stock, discount = product
-
-        if stock < item["quantity"]:
-            conn.close()
-            return jsonify({"error":"المخزون غير كافي"})
-
-        final = price - (price*discount/100)
-        item_total = final * item["quantity"]
-        total += item_total
-
-        cur.execute("UPDATE products SET stock = stock - ? WHERE id=?",
-                    (item["quantity"], item["id"]))
-
-        cur.execute("""
-        INSERT INTO order_items (order_id,product_id,quantity,price)
-        VALUES (?,?,?,?)
-        """,(order_id,item["id"],item["quantity"],final))
+        total+=item["price"]*item["quantity"]
+        cur.execute("""INSERT INTO order_items(order_id,product_name,quantity,price)
+                       VALUES(?,?,?,?)""",
+                    (order_id,item["name"],item["quantity"],item["price"]))
 
     cur.execute("UPDATE orders SET total=? WHERE id=?",(total,order_id))
-
     conn.commit()
     conn.close()
 
-    return jsonify({"success":True,"total":total})
+    return {"success":True,"order_id":order_id}
 
-# ================= LOGIN =================
+# =======================
+# إنشاء فاتورة PDF احترافية
+# =======================
+@app.route("/invoice/<int:order_id>")
+def invoice(order_id):
+    conn=connect()
+    order=conn.execute("SELECT * FROM orders WHERE id=?",(order_id,)).fetchone()
+    items=conn.execute("SELECT * FROM order_items WHERE order_id=?",(order_id,)).fetchall()
+    conn.close()
 
-@app.route("/login", methods=["GET","POST"])
-def login():
-    if request.method=="POST":
-        if request.form["password"]==os.environ.get("ADMIN_PASSWORD"):
-            session["admin"]=True
-            return redirect("/admin")
-    return """
-    <h3>تسجيل دخول المدير</h3>
-    <form method="post">
-    <input type="password" name="password" placeholder="كلمة المرور">
-    <button>دخول</button>
-    </form>
-    """
+    file_path=f"invoice_{order_id}.pdf"
+    doc=SimpleDocTemplate(file_path)
+    elements=[]
 
-# ================= ADMIN =================
+    elements.append(Paragraph("سوبر ماركت اولاد قايد محمد"))
+    elements.append(Spacer(1,0.3*inch))
+    elements.append(Paragraph("للتجارة العامة"))
+    elements.append(Spacer(1,0.3*inch))
+    elements.append(Paragraph(f"رقم الفاتورة: {order_id}"))
+    elements.append(Spacer(1,0.3*inch))
 
-@app.route("/admin", methods=["GET","POST"])
+    data=[["المنتج","الكمية","السعر"]]
+    for i in items:
+        data.append([i["product_name"],i["quantity"],i["price"]])
+
+    table=Table(data)
+    table.setStyle(TableStyle([
+        ('BACKGROUND',(0,0),(-1,0),colors.gold),
+        ('GRID',(0,0),(-1,-1),1,colors.black)
+    ]))
+
+    elements.append(table)
+    elements.append(Spacer(1,0.5*inch))
+    elements.append(Paragraph(f"الإجمالي: {order['total']} ريال"))
+    elements.append(Spacer(1,0.5*inch))
+    elements.append(Paragraph("إعداد وتصميم: م / وسيم العامري"))
+
+    doc.build(elements)
+
+    return send_file(file_path,as_attachment=True)
+
+# =======================
+# لوحة مدير فخمة
+# =======================
+@app.route("/admin")
 def admin():
-    if not session.get("admin"):
-        return redirect("/login")
-
     conn=connect()
-    cur=conn.cursor()
-
-    if request.method=="POST":
-        name=request.form["name"]
-        price=request.form["price"]
-        stock=request.form["stock"]
-        discount=request.form["discount"]
-
-        file=request.files["image"]
-        filename=secure_filename(file.filename)
-        path=os.path.join(UPLOAD_FOLDER, filename)
-        file.save(path)
-
-        cur.execute("""
-        INSERT INTO products (name,price,stock,discount,image)
-        VALUES (?,?,?,?,?)
-        """,(name,price,stock,discount,path))
-        conn.commit()
-
-    cur.execute("SELECT * FROM products")
-    products=cur.fetchall()
+    products=conn.execute("SELECT * FROM products").fetchall()
+    orders=conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+    total=conn.execute("SELECT IFNULL(SUM(total),0) FROM orders").fetchone()[0]
     conn.close()
 
     return render_template_string("""
-<h2>لوحة المدير</h2>
-<a href="/">المتجر</a> | <a href="/stats">الإحصائيات</a>
-<hr>
-<form method="post" enctype="multipart/form-data">
-اسم: <input name="name"><br>
-سعر: <input name="price"><br>
-مخزون: <input name="stock"><br>
-خصم%: <input name="discount"><br>
-صورة: <input type="file" name="image"><br>
-<button>إضافة</button>
-</form>
-<hr>
-{% for p in products %}
-<div>
-{{p[1]}} | مخزون: {{p[3]}}
-<a href="/delete/{{p[0]}}">حذف</a>
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+body{background:#0f0f0f;color:white;}
+.card{background:#1c1c1c;border:1px solid gold;}
+</style>
+</head>
+<body class="p-4">
+
+<h3 class="text-warning">لوحة تحكم المدير</h3>
+
+<div class="row mb-4">
+<div class="col-md-6">
+<div class="card p-3">
+<h5>عدد الطلبات</h5>
+<h3>{{orders}}</h3>
 </div>
+</div>
+<div class="col-md-6">
+<div class="card p-3">
+<h5>إجمالي المبيعات</h5>
+<h3>{{total}} ريال</h3>
+</div>
+</div>
+</div>
+
+<h5 class="text-warning">المنتجات</h5>
+<table class="table table-dark">
+<tr><th>الاسم</th><th>السعر</th><th>المخزون</th></tr>
+{% for p in products %}
+<tr>
+<td>{{p.name}}</td>
+<td>{{p.price}}</td>
+<td>{{p.stock}}</td>
+</tr>
 {% endfor %}
-""", products=products)
+</table>
 
-@app.route("/delete/<int:id>")
-def delete(id):
-    if not session.get("admin"):
-        return redirect("/login")
-    conn=connect()
-    cur=conn.cursor()
-    cur.execute("DELETE FROM products WHERE id=?",(id,))
-    conn.commit()
-    conn.close()
-    return redirect("/admin")
-
-# ================= STATS =================
-
-@app.route("/stats")
-def stats():
-    conn=connect()
-    cur=conn.cursor()
-    cur.execute("SELECT date,total FROM orders")
-    data=cur.fetchall()
-    conn.close()
-
-    dates=[d[0] for d in data]
-    totals=[d[1] for d in data]
-
-    return render_template_string("""
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<h2>إحصائيات المبيعات</h2>
-<canvas id="chart"></canvas>
-<script>
-new Chart(document.getElementById('chart'),{
-type:'line',
-data:{
-labels: {{dates|safe}},
-datasets:[{label:'المبيعات',data: {{totals|safe}},borderWidth:2}]
-}
-});
-</script>
-""", dates=dates, totals=totals)
-
-# ================= RUN =================
+</body>
+</html>
+""",products=products,orders=orders,total=total)
 
 if __name__=="__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)))
+    app.run(debug=True)
     
