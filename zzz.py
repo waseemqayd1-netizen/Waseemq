@@ -5,31 +5,45 @@ from datetime import datetime
 from urllib.parse import quote_plus
 
 app = Flask(__name__)
-app.secret_key = "your-secret-key"
+app.secret_key = "wasim-secret-key"
 
+# ==============================
+# Database Connection
+# ==============================
 def connect():
     return psycopg2.connect(os.environ.get("DATABASE_URL"), sslmode="require")
 
 def init_db():
     conn = connect()
     cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS categories (
+        id SERIAL PRIMARY KEY,
+        name TEXT
+    );
+    """)
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS products (
         id SERIAL PRIMARY KEY,
         name TEXT,
         price REAL,
         stock INTEGER,
-        image BYTEA
+        category_id INTEGER
     );
     """)
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS orders (
         id SERIAL PRIMARY KEY,
         created_at TIMESTAMP,
         customer_name TEXT,
-        customer_phone TEXT
+        customer_phone TEXT,
+        customer_location TEXT
     );
     """)
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS order_items (
         id SERIAL PRIMARY KEY,
@@ -39,314 +53,350 @@ def init_db():
         price REAL
     );
     """)
+
     conn.commit()
     conn.close()
 
 init_db()
 
-# ----------------------------
+# ==============================
 # Admin Login
-# ----------------------------
+# ==============================
 ADMIN_PASS = "080808"
 
 @app.route("/admin-login", methods=["GET","POST"])
 def admin_login():
-    if request.method == "POST":
+    if request.method=="POST":
         if request.form["password"] == ADMIN_PASS:
             session["admin"] = True
             return redirect("/admin")
-        else:
-            return "<h3>كلمة المرور خطأ</h3><a href='/admin-login'>رجوع</a>"
     return """
-    <div style="background:black;color:gold;padding:20px;font-family:Arial;">
-    <h2>🔐 دخول المدير</h2>
+    <body style='background:black;color:gold;font-family:Arial;text-align:center;padding:40px'>
+    <h2>دخول المدير</h2>
     <form method='POST'>
-      كلمة المرور: <input name='password' type='password' style='padding:5px;'><br><br>
-      <button style='background:gold;color:black;padding:8px;'>دخول</button>
+    <input type='password' name='password' placeholder='كلمة المرور'><br><br>
+    <button>دخول</button>
     </form>
-    </div>
+    </body>
     """
 
-# ----------------------------
+# ==============================
 # Admin Panel
-# ----------------------------
+# ==============================
 @app.route("/admin")
 def admin():
     if not session.get("admin"):
         return redirect("/admin-login")
 
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("SELECT id, name, price, stock, image FROM products")
-    products = cur.fetchall()
+    conn=connect();cur=conn.cursor()
+    cur.execute("SELECT * FROM categories")
+    categories=cur.fetchall()
 
     cur.execute("""
-    SELECT o.id, o.customer_name, o.customer_phone, SUM(oi.price*oi.quantity) 
-    FROM orders o JOIN order_items oi ON oi.order_id=o.id
-    GROUP BY o.id ORDER BY o.id DESC
+    SELECT p.id,p.name,p.price,p.stock,c.name
+    FROM products p
+    LEFT JOIN categories c ON p.category_id=c.id
     """)
-    orders = cur.fetchall()
+    products=cur.fetchall()
     conn.close()
 
     return render_template_string("""
-<html dir="rtl">
-<head><title>لوحة المدير</title>
-<style>
-body { background:black;color:gold;font-family:Arial;}
-table { width:100%; border-collapse:collapse;}
-th,td { border:1px solid gold; padding:8px;}
-img { width:60px;}
-.btn { background:gold;color:black;padding:6px 10px;text-decoration:none;font-weight:bold;}
-</style>
-</head>
-<body>
-<h1>📋 لوحة المدير</h1>
+    <html dir="rtl">
+    <body style="background:black;color:gold;font-family:Arial;">
+    <h1>لوحة المدير</h1>
 
-<h2>📦 المنتجات</h2>
-<a class="btn" href="/admin-add-product">➕ إضافة منتج</a>
-<table>
-<tr><th>صورة</th><th>اسم</th><th>السعر</th><th>المخزون</th><th>تعديل</th><th>حذف</th></tr>
-{% for p in products %}
-<tr>
-<td><img src="/image/{{p[0]}}"></td>
-<td>{{p[1]}}</td><td>{{p[2]}}</td><td>{{p[3]}}</td>
-<td><a class="btn" href="/admin-edit-product/{{p[0]}}">✏️</a></td>
-<td><a class="btn" href="/admin-delete-product/{{p[0]}}">🗑️</a></td>
-</tr>
-{% endfor %}
-</table>
+    <h2>الفئات</h2>
+    <a href="/admin-add-category">إضافة فئة</a>
+    <ul>
+    {% for c in categories %}
+        <li>{{c[1]}} 
+        <a href="/admin-delete-category/{{c[0]}}">حذف</a></li>
+    {% endfor %}
+    </ul>
 
-<h2>📊 الطلبات</h2>
-<table>
-<tr><th>رقم الطلب</th><th>اسم الزبون</th><th>رقم الجوال</th><th>الإجمالي</th></tr>
-{% for o in orders %}
-<tr>
-<td>{{o[0]}}</td><td>{{o[1]}}</td><td>{{o[2]}}</td><td>{{o[3]}}</td>
-</tr>
-{% endfor %}
-</table>
-</body>
-</html>
-""", products=products, orders=orders)
+    <h2>المنتجات</h2>
+    <a href="/admin-add-product">إضافة منتج</a>
 
-# ----------------------------
-# Admin - Add Product
-# ----------------------------
-@app.route("/admin-add-product", methods=["GET","POST"])
-def admin_add_product():
+    {% for p in products %}
+        {% if p[3] < 3 %}
+        <div style="color:red;">⚠ {{p[1]}} المخزون منخفض ({{p[3]}})</div>
+        {% endif %}
+    {% endfor %}
+
+    <table border="1" width="100%" style="border-collapse:collapse;">
+    <tr><th>الاسم</th><th>السعر</th><th>المخزون</th><th>الفئة</th><th>حذف</th></tr>
+    {% for p in products %}
+    <tr>
+    <td>{{p[1]}}</td>
+    <td>{{p[2]}}</td>
+    <td {% if p[3] < 3 %} style="color:red;" {% endif %}>{{p[3]}}</td>
+    <td>{{p[4]}}</td>
+    <td><a href="/admin-delete-product/{{p[0]}}">حذف</a></td>
+    </tr>
+    {% endfor %}
+    </table>
+    </body>
+    </html>
+    """,categories=categories,products=products)
+
+# ==============================
+# Add Category
+# ==============================
+@app.route("/admin-add-category", methods=["GET","POST"])
+def admin_add_category():
     if not session.get("admin"):
         return redirect("/admin-login")
     if request.method=="POST":
-        name=request.form["name"]
-        price=request.form["price"]
-        stock=request.form["stock"]
-        image=request.files["image"].read()
-        conn=connect()
-        cur=conn.cursor()
-        cur.execute("INSERT INTO products (name,price,stock,image) VALUES (%s,%s,%s,%s)",
-                    (name,price,stock,image))
-        conn.commit()
-        conn.close()
+        conn=connect();cur=conn.cursor()
+        cur.execute("INSERT INTO categories (name) VALUES (%s)",(request.form["name"],))
+        conn.commit();conn.close()
         return redirect("/admin")
     return """
-    <div style='background:black;color:gold;font-family:Arial;padding:20px;'>
-    <h2>📥 إضافة منتج جديد</h2>
-    <form method='POST' enctype='multipart/form-data'>
-      الاسم:<br><input name='name'><br><br>
-      السعر:<br><input name='price'><br><br>
-      المخزون:<br><input name='stock'><br><br>
-      الصورة:<br><input type='file' name='image'><br><br>
-      <button style='background:gold;color:black;padding:8px;'>حفظ</button>
-    </form></div>
+    <body style='background:black;color:gold;'>
+    <form method='POST'>
+    اسم الفئة:<br>
+    <input name='name'><br><br>
+    <button>حفظ</button>
+    </form>
+    </body>
     """
 
-# ----------------------------
-# Admin - Edit Product
-# ----------------------------
-@app.route("/admin-edit-product/<int:id>", methods=["GET","POST"])
-def admin_edit_product(id):
-    if not session.get("admin"):
-        return redirect("/admin-login")
-    conn=connect()
-    cur=conn.cursor()
+@app.route("/admin-delete-category/<int:id>")
+def admin_delete_category(id):
+    conn=connect();cur=conn.cursor()
+    cur.execute("DELETE FROM categories WHERE id=%s",(id,))
+    conn.commit();conn.close()
+    return redirect("/admin")
+
+# ==============================
+# Add Product
+# ==============================
+@app.route("/admin-add-product", methods=["GET","POST"])
+def admin_add_product():
+    conn=connect();cur=conn.cursor()
+    cur.execute("SELECT * FROM categories")
+    categories=cur.fetchall()
+
     if request.method=="POST":
-        name=request.form["name"]
-        price=request.form["price"]
-        stock=request.form["stock"]
-        img_file=request.files.get("image")
-        if img_file and img_file.filename!="":
-            image=img_file.read()
-            cur.execute("UPDATE products SET name=%s,price=%s,stock=%s,image=%s WHERE id=%s",
-                        (name,price,stock,image,id))
-        else:
-            cur.execute("UPDATE products SET name=%s,price=%s,stock=%s WHERE id=%s",
-                        (name,price,stock,id))
-        conn.commit()
-        conn.close()
+        cur.execute("""
+        INSERT INTO products (name,price,stock,category_id)
+        VALUES (%s,%s,%s,%s)
+        """,(request.form["name"],request.form["price"],
+             request.form["stock"],request.form["category_id"]))
+        conn.commit();conn.close()
         return redirect("/admin")
-    cur.execute("SELECT name,price,stock FROM products WHERE id=%s",(id,))
-    p=cur.fetchone()
-    conn.close()
-    return f"""
-    <div style='background:black;color:gold;font-family:Arial;padding:20px;'>
-    <h2>✏️ تعديل المنتج</h2>
-    <form method='POST' enctype='multipart/form-data'>
-      الاسم:<br><input name='name' value='{p[0]}'><br><br>
-      السعر:<br><input name='price' value='{p[1]}'><br><br>
-      المخزون:<br><input name='stock' value='{p[2]}'><br><br>
-      تغيير الصورة:<br><input type='file' name='image'><br><br>
-      <button style='background:gold;color:black;padding:8px;'>تحديث</button>
-    </form></div>
-    """
 
-# ----------------------------
-# Admin - Delete Product
-# ----------------------------
+    return render_template_string("""
+    <body style='background:black;color:gold;'>
+    <form method='POST'>
+    الاسم:<br><input name='name'><br>
+    السعر:<br><input name='price'><br>
+    المخزون:<br><input name='stock'><br>
+    الفئة:<br>
+    <select name="category_id">
+    {% for c in categories %}
+        <option value="{{c[0]}}">{{c[1]}}</option>
+    {% endfor %}
+    </select><br><br>
+    <button>حفظ</button>
+    </form>
+    </body>
+    """,categories=categories)
+
 @app.route("/admin-delete-product/<int:id>")
 def admin_delete_product(id):
-    if not session.get("admin"):
-        return redirect("/admin-login")
     conn=connect();cur=conn.cursor()
     cur.execute("DELETE FROM products WHERE id=%s",(id,))
     conn.commit();conn.close()
     return redirect("/admin")
 
-# ----------------------------
-# Customer Views
-# ----------------------------
+# ==============================
+# Customer View
+# ==============================
 @app.route("/")
 def index():
     conn=connect();cur=conn.cursor()
-    cur.execute("SELECT id,name,price FROM products")
+    cur.execute("SELECT * FROM categories")
+    categories=cur.fetchall()
+    conn.close()
+
+    return render_template_string("""
+    <html dir="rtl">
+    <body style="background:black;color:gold;font-family:Arial;text-align:center;">
+    <h1>سوبر ماركت اولاد قايد محمد</h1>
+    <h3>للتجارة العامة</h3>
+
+    {% for c in categories %}
+    <div style="border:1px solid gold;margin:10px;padding:10px;">
+    <a href="/category/{{c[0]}}" style="color:gold;font-size:20px;">{{c[1]}}</a>
+    </div>
+    {% endfor %}
+
+    <br><a href="/cart">🛒 سلة المشتريات</a>
+
+    <hr>
+    📍 الموقع: الازرق / موعد حماده – حبيل تود<br>
+    👤 للصحابها: فايز / وإخوانه<br>
+    ⚙ اعداد وتصميم: م / وسيم العامري<br>
+    📞 967770295876
+    </body>
+    </html>
+    """,categories=categories)
+
+# ==============================
+# Category Products
+# ==============================
+@app.route("/category/<int:id>")
+def category_view(id):
+    conn=connect();cur=conn.cursor()
+    cur.execute("SELECT name FROM categories WHERE id=%s",(id,))
+    cname=cur.fetchone()[0]
+
+    cur.execute("SELECT id,name,price,stock FROM products WHERE category_id=%s",(id,))
     products=cur.fetchall()
     conn.close()
-    return render_template_string("""
-<html dir="rtl">
-<head><title>المتجر</title>
-<style>
-body { background:black;color:gold;font-family:Arial; }
-.card {
-  border:2px solid gold; border-radius:8px; width:200px; padding:10px;
-  margin:10px; display:inline-block; vertical-align:top;
-}
-.btn { background:gold;color:black;padding:8px;font-weight:bold;text-decoration:none;}
-</style>
-</head>
-<body>
-<h1>🌟 متجر أولاد قايد 🌟</h1>
-<a class="btn" href="/cart">🛒 سلة</a><hr>
-{% for p in products %}
-  <div class="card">
-    <img src="/image/{{p[0]}}" width="150"><br><br>
-    <strong>{{p[1]}}</strong><br>
-    <span>{{p[2]}} ريال</span><br><br>
-    <a class="btn" href="/add_to_cart/{{p[0]}}">➕ أضف للسلة</a>
-  </div>
-{% endfor %}
-</body>
-</html>
-""",products=products)
 
-# ----------------------------
-# Add to Cart
-# ----------------------------
+    return render_template_string("""
+    <body style="background:black;color:gold;">
+    <h2>{{cname}}</h2>
+
+    {% for p in products %}
+    <div style="border:1px solid gold;margin:10px;padding:10px;">
+    {{p[1]}} - {{p[2]}} ريال<br>
+
+    {% if p[3] > 0 %}
+        <a href="/add_to_cart/{{p[0]}}">➕ أضف</a>
+    {% else %}
+        <span style="color:red;">نفذ المخزون</span>
+    {% endif %}
+    </div>
+    {% endfor %}
+
+    <br><a href="/">رجوع</a>
+    </body>
+    """,cname=cname,products=products)
+
+# ==============================
+# Cart
+# ==============================
 @app.route("/add_to_cart/<int:id>")
 def add_to_cart(id):
-    cart=session.get("cart",{});cart[str(id)]=cart.get(str(id),0)+1
-    session["cart"]=cart;return redirect("/cart")
+    conn=connect();cur=conn.cursor()
+    cur.execute("SELECT stock FROM products WHERE id=%s",(id,))
+    stock=cur.fetchone()[0]
 
-# ----------------------------
-# Cart
-# ----------------------------
+    if stock <= 0:
+        conn.close()
+        return "المنتج نفذ"
+
+    cart=session.get("cart",{})
+    cart[str(id)]=cart.get(str(id),0)+1
+    session["cart"]=cart
+    conn.close()
+    return redirect("/cart")
+
 @app.route("/cart")
 def cart():
     cart=session.get("cart",{})
     items=[];total=0
     conn=connect();cur=conn.cursor()
+
     for pid,qty in cart.items():
         cur.execute("SELECT name,price FROM products WHERE id=%s",(pid,))
         p=cur.fetchone()
-        cur.execute("SELECT image FROM products WHERE id=%s",(pid,))
-        img=cur.fetchone()[0]
-        items.append((pid,p[0],p[1],qty,img));total+=p[1]*qty
+        items.append((pid,p[0],p[1],qty))
+        total+=p[1]*qty
     conn.close()
-    return render_template_string("""
-<html dir="rtl">
-<body style="background:black;color:gold;font-family:Arial;">
-<h1>🛒 سلتك</h1>
-<table border="1" width="100%" style="border-collapse:collapse;color:gold;">
-<tr><th>صورة</th><th>الاسم</th><th>السعر</th><th>الكمية</th><th>الجميع</th></tr>
-{% for i in items %}
-<tr>
-<td><img src="/image/{{i[0]}}" width="50"></td>
-<td>{{i[1]}}</td><td>{{i[2]}}</td><td>{{i[3]}}</td><td>{{i[2]*i[3]}}</td>
-</tr>
-{% endfor %}
-</table>
-<h2>💰 الإجمالي: {{total}} ريال</h2>
-<a class="btn" href="/checkout">📦 Checkout</a>
-</body>
-</html>
-""",items=items,total=total)
 
-# ----------------------------
-# Checkout + Invoice
-# ----------------------------
+    return render_template_string("""
+    <body style="background:black;color:gold;">
+    <h2>سلة المشتريات</h2>
+
+    <table border="1" width="100%">
+    <tr><th>المنتج</th><th>السعر</th><th>الكمية</th><th>الإجمالي</th></tr>
+    {% for i in items %}
+    <tr>
+    <td>{{i[1]}}</td>
+    <td>{{i[2]}}</td>
+    <td>{{i[3]}}</td>
+    <td>{{i[2]*i[3]}}</td>
+    </tr>
+    {% endfor %}
+    </table>
+
+    <h3>الإجمالي: {{total}} ريال</h3>
+
+    <a href="/checkout">عرض الفاتورة</a>
+    </body>
+    """,items=items,total=total)
+
+# ==============================
+# Checkout
+# ==============================
 @app.route("/checkout",methods=["GET","POST"])
 def checkout():
     cart=session.get("cart",{})
-    if not cart: return redirect("/cart")
+    if not cart:
+        return redirect("/")
+
     if request.method=="POST":
         cname=request.form["customer_name"]
         cphone=request.form["customer_phone"]
+        clocation=request.form["customer_location"]
+
         conn=connect();cur=conn.cursor()
-        cur.execute("INSERT INTO orders (created_at,customer_name,customer_phone) VALUES (%s,%s,%s) RETURNING id",
-                    (datetime.now(),cname,cphone))
-        oid=cur.fetchone()[0];items=[];total=0
+        cur.execute("""
+        INSERT INTO orders (created_at,customer_name,customer_phone,customer_location)
+        VALUES (%s,%s,%s,%s) RETURNING id
+        """,(datetime.now(),cname,cphone,clocation))
+        oid=cur.fetchone()[0]
+
+        items=[];total=0
+
         for pid,qty in cart.items():
             cur.execute("SELECT name,price FROM products WHERE id=%s",(pid,))
-            p=cur.fetchone();total+=p[1]*qty
-            items.append((pid,p[0],p[1],qty))
-            cur.execute("INSERT INTO order_items (order_id,product_id,quantity,price) VALUES (%s,%s,%s,%s)",
-                        (oid,pid,qty,p[1]))
-        conn.commit();conn.close();session["cart"]={}
-        text=f"فاتورتي من سوبر ماركت أولاد قايد للتجارة العامة:%0A"
-        for i in items: text+=f"{i[1]} x{i[3]} = {i[2]*i[3]} ريال%0A"
-        text+=f"الإجمالي = {total} ريال%0Aرقم الزبون: {cphone}"
+            p=cur.fetchone()
+            total+=p[1]*qty
+            items.append((p[0],p[1],qty,p[1]*qty))
+
+            cur.execute("""
+            INSERT INTO order_items (order_id,product_id,quantity,price)
+            VALUES (%s,%s,%s,%s)
+            """,(oid,pid,qty,p[1]))
+
+            cur.execute("UPDATE products SET stock=stock-%s WHERE id=%s",(qty,pid))
+
+        conn.commit();conn.close()
+        session["cart"]={}
+
+        text="فاتورة سوبر ماركت اولاد قايد محمد%0A"
+        for i in items:
+            text+=f"{i[0]} x{i[2]} = {i[3]} ريال%0A"
+        text+=f"الإجمالي {total} ريال"
         wa_url=f"https://wa.me/967770295876?text={quote_plus(text)}"
-        return render_template_string("""
-<html dir="rtl">
-<body style="background:black;color:gold;font-family:Arial;">
-<h1>📄 فاتورتك</h1>
-<p><strong style="color:gold;">سوبر ماركت أولاد قايد للتجارة العامة</strong></p>
-<p><strong>اسم:</strong> {{cname}} - <strong>الهاتف:</strong> {{cphone}}</p>
-<hr style="border:1px dashed gold;">
-<table border="1" width="100%" style="border-collapse:collapse;color:gold;">
-<tr><th>اسم</th><th>السعر</th><th>كمية</th><th>الإجمالي</th></tr>
-{% for i in items %}
-<tr><td>{{i[1]}}</td><td>{{i[2]}}</td><td>{{i[3]}}</td><td>{{i[2]*i[3]}}</td></tr>
-{% endfor %}
-</table>
-<h2>💰 الإجمالي: {{total}} ريال</h2>
-<a href="{{wa_url}}" style="background:gold;color:black;padding:10px;font-weight:bold;text-decoration:none;">📱 إرسال واتساب</a><br><br>
-<a href="/" style="background:gold;color:black;padding:10px;font-weight:bold;text-decoration:none;">🏠 الرئيسية</a>
-</body>
-</html>
-""",items=items,total=total,cname=cname,cphone=cphone,wa_url=wa_url)
+
+        return f"""
+        <body style='background:black;color:gold;text-align:center;'>
+        <h2>فاتورتك</h2>
+        الاسم: {cname}<br>
+        الهاتف: {cphone}<br>
+        الموقع: {clocation}<br>
+        <h3>الإجمالي: {total} ريال</h3>
+        <a href='{wa_url}'>ارسال واتساب</a>
+        </body>
+        """
+
     return """
-<html dir="rtl">
-<body style="background:black;color:gold;font-family:Arial;">
-<h2>📦 Checkout</h2>
-<form method="POST">
-الاسم:<br><input name="customer_name" required><br><br>
-الهاتف:<br><input name="customer_phone" required><br><br>
-<button style="background:gold;color:black;padding:10px;font-weight:bold;">🧾 عرض الفاتورة</button>
-</form>
-</body>
-</html>
-"""
+    <body style='background:black;color:gold;'>
+    <form method='POST'>
+    الاسم:<br><input name='customer_name'><br>
+    الهاتف:<br><input name='customer_phone'><br>
+    الموقع:<br><input name='customer_location'><br><br>
+    <button>تأكيد</button>
+    </form>
+    </body>
+    """
 
 if __name__=="__main__":
     app.run()
     
-
