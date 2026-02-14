@@ -1,24 +1,22 @@
-from flask import Flask, request, render_template_string, redirect, url_for, flash
-import sqlite3, os, uuid
-from werkzeug.utils import secure_filename
+from flask import Flask, request, render_template_string, redirect, url_for, session, flash
+import sqlite3, os
 from datetime import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = "secret123"
+app.secret_key = "super_secret_key_2026"
 
-# ================= إعدادات =================
+# ================== إعدادات ==================
 STORE_NAME = "🏪 سوبر ماركت أولاد قايد محمد"
-ADMIN_PASSWORD = "1111"
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD_HASH = generate_password_hash("1111")
 
-# مهم لريندر (لو فعلت Disk استخدم /var/data/)
-DB_FILE = os.path.join(os.getcwd(), "supermarket.db")
+# لريندر (لو فعلت disk استخدم /var/data/)
 
-UPLOAD_FOLDER = os.path.join("static", "images")
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
+DB_FILE = "/var/data/supermarket.db"
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# ================= قاعدة البيانات =================
+# ================== قاعدة البيانات ==================
 def get_db():
     return sqlite3.connect(DB_FILE)
 
@@ -28,21 +26,20 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS products (
-        name TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE,
         price REAL,
-        stock INTEGER,
-        image TEXT,
-        discount REAL DEFAULT 0
+        stock INTEGER
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS sales (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        datetime TEXT,
         product TEXT,
         qty INTEGER,
-        total REAL
+        total REAL,
+        date TEXT
     )
     """)
 
@@ -51,66 +48,63 @@ def init_db():
 
 init_db()
 
-# ================= أدوات =================
-def allowed_file(filename):
-    return "." in filename and filename.rsplit(".",1)[1].lower() in ALLOWED_EXTENSIONS
+# ================== أدوات ==================
+def admin_required():
+    return session.get("admin")
 
-def get_products():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM products")
-    data = cur.fetchall()
-    conn.close()
-    return data
-
-def get_product(name):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM products WHERE name=?", (name,))
-    data = cur.fetchone()
-    conn.close()
-    return data
-
-# ================= صفحة الزبون =================
+# ================== صفحة الزبون ==================
 @app.route("/")
 def home():
-    products = get_products()
+    search = request.args.get("search","")
+    conn = get_db()
+    cur = conn.cursor()
+
+    if search:
+        cur.execute("SELECT * FROM products WHERE name LIKE ?", ('%'+search+'%',))
+    else:
+        cur.execute("SELECT * FROM products")
+
+    products = cur.fetchall()
+    conn.close()
 
     html = """
-    <!DOCTYPE html>
-    <html lang="ar">
+    <html dir="rtl">
     <head>
-        <meta charset="UTF-8">
-        <title>واجهة الزبون</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet">
-        <style>
-            body{direction:rtl;padding:20px;background:#f8f9fa;}
-            .card{margin:10px;padding:10px;text-align:center}
-            img{max-width:120px;height:120px;object-fit:contain}
-        </style>
+    <title>الواجهة</title>
+    <style>
+    body{background:#111;color:#fff;font-family:tahoma;padding:20px}
+    .card{background:#1e1e1e;padding:15px;margin:10px;border-radius:10px}
+    .gold{color:gold}
+    button{background:gold;border:none;padding:5px 10px}
+    input{padding:5px}
+    </style>
     </head>
-    <body class="container">
+    <body>
 
-    <h2 class="text-center mb-4">{{store}}</h2>
+    <h2 class="gold">{{store}}</h2>
 
-    <a href="/admin" class="btn btn-warning mb-3">🔧 صفحة المدير</a>
+    <form>
+        <input name="search" placeholder="بحث منتج">
+        <button>بحث</button>
+    </form>
 
-    <div class="row">
-    {% for n,p,s,img,d in products %}
-        <div class="col-md-3">
-            <div class="card">
-                {% if img %}
-                    <img src="/{{img}}">
-                {% else %}
-                    <img src="https://via.placeholder.com/120">
-                {% endif %}
-                <h5>{{n}}</h5>
-                <div>السعر: {{p}}</div>
-                <div>المخزون: {{s}}</div>
-            </div>
-        </div>
-    {% endfor %}
+    <br>
+    <a href="/admin_login" style="color:gold">🔐 دخول المدير</a>
+    <hr>
+
+    {% for p in products %}
+    <div class="card">
+        <h3>{{p[1]}}</h3>
+        <div>السعر: {{p[2]}}</div>
+        <div>المخزون: {{p[3]}}</div>
+
+        <form method="POST" action="/buy">
+            <input type="hidden" name="id" value="{{p[0]}}">
+            <input type="number" name="qty" min="1" value="1">
+            <button>شراء</button>
+        </form>
     </div>
+    {% endfor %}
 
     </body>
     </html>
@@ -118,106 +112,132 @@ def home():
 
     return render_template_string(html, products=products, store=STORE_NAME)
 
-# ================= صفحة المدير =================
+# ================== شراء ==================
+@app.route("/buy", methods=["POST"])
+def buy():
+    pid = request.form["id"]
+    qty = int(request.form["qty"])
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT name, price, stock FROM products WHERE id=?", (pid,))
+    product = cur.fetchone()
+
+    if not product:
+        return "المنتج غير موجود"
+
+    name, price, stock = product
+
+    if qty > stock:
+        return "الكمية غير متوفرة"
+
+    total = price * qty
+    new_stock = stock - qty
+
+    cur.execute("UPDATE products SET stock=? WHERE id=?", (new_stock, pid))
+    cur.execute("INSERT INTO sales (product, qty, total, date) VALUES (?,?,?,?)",
+                (name, qty, total, datetime.now().strftime("%Y-%m-%d")))
+
+    conn.commit()
+    conn.close()
+
+    return redirect("/")
+
+# ================== تسجيل دخول المدير ==================
+@app.route("/admin_login", methods=["GET","POST"])
+def admin_login():
+    if request.method == "POST":
+        username = request.form["username"]
+        password = request.form["password"]
+
+        if username == ADMIN_USERNAME and check_password_hash(ADMIN_PASSWORD_HASH, password):
+            session["admin"] = True
+            return redirect("/admin")
+        else:
+            flash("بيانات غير صحيحة")
+
+    return """
+    <body style="background:#111;color:white;text-align:center;padding:50px">
+    <h2>دخول المدير</h2>
+    <form method="POST">
+    <input name="username" placeholder="اسم المستخدم"><br><br>
+    <input type="password" name="password" placeholder="كلمة المرور"><br><br>
+    <button style="background:gold">دخول</button>
+    </form>
+    </body>
+    """
+
+# ================== لوحة المدير ==================
 @app.route("/admin", methods=["GET","POST"])
 def admin():
+    if not admin_required():
+        return redirect("/admin_login")
+
+    conn = get_db()
+    cur = conn.cursor()
+
     if request.method == "POST":
-        password = request.form.get("password")
-        if password != ADMIN_PASSWORD:
-            flash("كلمة المرور خطأ")
-            return redirect(url_for("admin"))
+        name = request.form["name"]
+        price = request.form["price"]
+        stock = request.form["stock"]
 
-        action = request.form.get("action")
-
-        if action == "add":
-            name = request.form.get("name")
-            price = float(request.form.get("price"))
-            stock = int(request.form.get("stock"))
-            discount = float(request.form.get("discount",0))
-            image_file = request.files.get("image")
-
-            image_path = ""
-            if image_file and allowed_file(image_file.filename):
-                filename = secure_filename(image_file.filename)
-                filename = f"{uuid.uuid4().hex}_{filename}"
-                path = os.path.join(UPLOAD_FOLDER, filename)
-                image_file.save(path)
-                image_path = path.replace("\\","/")
-
-            conn = get_db()
-            cur = conn.cursor()
-            try:
-                cur.execute("INSERT INTO products VALUES (?,?,?,?,?)",
-                            (name, price, stock, image_path, discount))
-                conn.commit()
-            except:
-                flash("المنتج موجود مسبقاً")
-            conn.close()
-
-        elif action == "delete":
-            name = request.form.get("name")
-            conn = get_db()
-            cur = conn.cursor()
-            cur.execute("DELETE FROM products WHERE name=?", (name,))
+        try:
+            cur.execute("INSERT INTO products (name,price,stock) VALUES (?,?,?)",
+                        (name, price, stock))
             conn.commit()
-            conn.close()
+        except:
+            pass
 
-        return redirect(url_for("admin"))
+    cur.execute("SELECT * FROM products")
+    products = cur.fetchall()
 
-    products = get_products()
+    cur.execute("SELECT SUM(total) FROM sales WHERE date=?", 
+                (datetime.now().strftime("%Y-%m-%d"),))
+    today_sales = cur.fetchone()[0] or 0
+
+    conn.close()
 
     html = """
-    <!DOCTYPE html>
-    <html lang="ar">
-    <head>
-        <meta charset="UTF-8">
-        <title>صفحة المدير</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet">
-        <style>body{direction:rtl;padding:20px}</style>
-    </head>
-    <body class="container">
+    <html dir="rtl">
+    <body style="background:#111;color:white;padding:20px">
 
-    <h2>🔧 صفحة المدير</h2>
+    <h2 style="color:gold">لوحة التحكم</h2>
 
-    <form method="POST" enctype="multipart/form-data">
-        <input type="hidden" name="action" value="add">
-        كلمة المرور: <input type="password" name="password" required><br><br>
-        اسم المنتج: <input type="text" name="name" required><br><br>
-        السعر: <input type="number" step="0.01" name="price" required><br><br>
-        الكمية: <input type="number" name="stock" required><br><br>
-        الخصم %: <input type="number" step="0.01" name="discount" value="0"><br><br>
-        صورة: <input type="file" name="image"><br><br>
-        <button class="btn btn-success">إضافة المنتج</button>
+    <h3>💰 أرباح اليوم: {{today}}</h3>
+
+    <h3>➕ إضافة منتج</h3>
+    <form method="POST">
+    الاسم:<input name="name"><br><br>
+    السعر:<input name="price"><br><br>
+    المخزون:<input name="stock"><br><br>
+    <button style="background:gold">إضافة</button>
     </form>
 
     <hr>
 
-    <h3>المنتجات</h3>
-    <table class="table table-bordered">
-    <tr><th>الاسم</th><th>السعر</th><th>المخزون</th><th>حذف</th></tr>
-    {% for n,p,s,img,d in products %}
-        <tr>
-            <td>{{n}}</td>
-            <td>{{p}}</td>
-            <td>{{s}}</td>
-            <td>
-                <form method="POST">
-                    <input type="hidden" name="action" value="delete">
-                    <input type="hidden" name="password" value="1111">
-                    <input type="hidden" name="name" value="{{n}}">
-                    <button class="btn btn-danger btn-sm">حذف</button>
-                </form>
-            </td>
-        </tr>
+    <h3>📦 المنتجات</h3>
+    {% for p in products %}
+        <div>
+        {{p[1]}} | السعر: {{p[2]}} | المخزون: {{p[3]}}
+        </div>
     {% endfor %}
-    </table>
+
+    <br><br>
+    <a href="/logout" style="color:gold">تسجيل خروج</a>
 
     </body>
     </html>
     """
 
-    return render_template_string(html, products=products)
+    return render_template_string(html, products=products, today=today_sales)
 
-# ================= تشغيل =================
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/")
+
+# ================== تشغيل ==================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+    
